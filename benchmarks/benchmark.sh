@@ -19,6 +19,7 @@ OUTPUT_DIR="./benchmarks/results"
 AGG_CONFIG=""
 DISAGG_CONFIG=""
 VANILLA_CONFIG=""
+ENDPOINT=""
 
 # Flags
 VERBOSE=false
@@ -31,12 +32,15 @@ This script runs complete LLM performance benchmarks across aggregated, disaggre
 and vanilla deployments, then generates performance plots.
 
 USAGE:
-    $0 --namespace NAMESPACE [--agg CONFIG] [--disagg CONFIG] [--vanilla CONFIG] [OPTIONS]
+    $0 --namespace NAMESPACE [--endpoint URL | --agg CONFIG] [--disagg CONFIG] [--vanilla CONFIG] [OPTIONS]
 
 REQUIRED:
     -n, --namespace NAMESPACE     Kubernetes namespace
 
-    At least one of:
+    Either:
+    --endpoint URL                Existing endpoint URL to benchmark
+
+    Or at least one of:
     --agg CONFIG                  Aggregated deployment manifest
     --disagg CONFIG               Disaggregated deployment manifest
     --vanilla CONFIG              Vanilla backend deployment manifest
@@ -60,6 +64,10 @@ EXAMPLES:
     # Benchmark only aggregated deployment
     $0 --namespace my-namespace \\
        --agg components/backends/vllm/deploy/agg.yaml
+
+    # Benchmark existing endpoint
+    $0 --namespace my-namespace \\
+       --endpoint "http://localhost:8000"
 
     # Custom model and sequence lengths
     $0 --namespace my-namespace \\
@@ -115,6 +123,10 @@ parse_args() {
                 VANILLA_CONFIG="$2"
                 shift 2
                 ;;
+            --endpoint)
+                ENDPOINT="$2"
+                shift 2
+                ;;
             --verbose)
                 VERBOSE=true
                 shift
@@ -135,9 +147,24 @@ validate_config() {
         errors+=("--namespace is required")
     fi
 
-    # Check that at least one deployment type is specified
-    if [[ -z "$AGG_CONFIG" && -z "$DISAGG_CONFIG" && -z "$VANILLA_CONFIG" ]]; then
-        errors+=("At least one deployment type (--agg, --disagg, or --vanilla) is required")
+    # Check mutual exclusivity between endpoint and deployment manifests
+    has_endpoint=false
+    has_deployments=false
+
+    if [[ -n "$ENDPOINT" ]]; then
+        has_endpoint=true
+    fi
+
+    if [[ -n "$AGG_CONFIG" || -n "$DISAGG_CONFIG" || -n "$VANILLA_CONFIG" ]]; then
+        has_deployments=true
+    fi
+
+    if [[ "$has_endpoint" == "true" && "$has_deployments" == "true" ]]; then
+        errors+=("--endpoint cannot be used together with --agg, --disagg, or --vanilla")
+    fi
+
+    if [[ "$has_endpoint" == "false" && "$has_deployments" == "false" ]]; then
+        errors+=("Must specify either --endpoint OR at least one deployment type (--agg, --disagg, or --vanilla)")
     fi
 
     if [[ ${#errors[@]} -gt 0 ]]; then
@@ -189,9 +216,15 @@ print_config() {
     echo "Output Sequence Length: $OSL tokens"
     echo "Sequence Std Dev:       $STD tokens"
     echo "Output Directory:       $OUTPUT_DIR"
-    echo "Aggregated Config:      $AGG_CONFIG"
-    echo "Disaggregated Config:   $DISAGG_CONFIG"
-    echo "Vanilla Config:         $VANILLA_CONFIG"
+
+    if [[ -n "$ENDPOINT" ]]; then
+        echo "Endpoint URL:           $ENDPOINT"
+    else
+        echo "Aggregated Config:      ${AGG_CONFIG:-"(not specified)"}"
+        echo "Disaggregated Config:   ${DISAGG_CONFIG:-"(not specified)"}"
+        echo "Vanilla Config:         ${VANILLA_CONFIG:-"(not specified)"}"
+    fi
+
     echo "==============================="
     echo
 }
@@ -226,6 +259,10 @@ run_benchmark() {
 
     if [[ -n "$VANILLA_CONFIG" ]]; then
         cmd+=(--vanilla "$VANILLA_CONFIG")
+    fi
+
+    if [[ -n "$ENDPOINT" ]]; then
+        cmd+=(--endpoint "$ENDPOINT")
     fi
 
     if [[ "$VERBOSE" == "true" ]]; then

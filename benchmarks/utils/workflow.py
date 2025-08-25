@@ -28,6 +28,7 @@ async def run_benchmark_workflow(
     agg_manifest: str = None,
     disagg_manifest: str = None,
     vanilla_manifest: str = None,
+    endpoint: str = None,
     isl: int = 200,
     std: int = 10,
     osl: int = 200,
@@ -36,20 +37,51 @@ async def run_benchmark_workflow(
 ) -> None:
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
+    # Benchmark existing endpoint (if specified)
+    if endpoint:
+        print(f"🚀 Starting benchmark of existing endpoint: {endpoint}")
+        print(f"📁 Results will be saved to: {Path(output_dir) / 'benchmarking'}")
+        print("⚙️  Starting endpoint concurrency sweep!", flush=True)
+        print(
+            "⏱️  This may take several minutes - running through multiple concurrency levels...",
+            flush=True,
+        )
+        print(f"🎯 Model: {model} | ISL: {isl} | OSL: {osl} | StdDev: {std}")
+
+        run_concurrency_sweep(
+            service_url=endpoint,
+            model_name=model,
+            isl=isl,
+            osl=osl,
+            stddev=std,
+            output_dir=Path(output_dir) / "benchmarking",
+        )
+        print("✅ Endpoint benchmark completed successfully!")
+
+        # Generate plots for endpoint benchmarking
+        print("📊 Generating performance plots...")
+        generate_plots(base_output_dir=Path(output_dir))
+        print(f"📈 Plots saved to: {Path(output_dir) / 'plots'}")
+        print(f"📋 Summary saved to: {Path(output_dir) / 'SUMMARY.txt'}")
+        return
+
     # Deploy and benchmark aggregated (if specified)
     if agg_manifest:
         print("🚀 Starting aggregated deployment benchmark...")
+        print(f"📄 Manifest: {agg_manifest}")
+        print(f"📁 Results will be saved to: {Path(output_dir) / 'agg'}")
         agg_name = Path(agg_manifest).stem
         agg_client = DynamoDeploymentClient(
             namespace=namespace, deployment_name=agg_name
         )
         await deploy_and_wait(agg_client, agg_manifest)
         try:
-            print("Starting aggregated concurrency sweep!", flush=True)
+            print("⚙️  Starting aggregated concurrency sweep!", flush=True)
             print(
-                "This may take several minutes - running through multiple concurrency levels...",
+                "⏱️  This may take several minutes - running through multiple concurrency levels...",
                 flush=True,
             )
+            print(f"🎯 Model: {model} | ISL: {isl} | OSL: {osl} | StdDev: {std}")
             run_concurrency_sweep(
                 service_url=agg_client.port_forward_frontend(quiet=True),
                 model_name=model,
@@ -61,20 +93,27 @@ async def run_benchmark_workflow(
             agg_client.stop_port_forward()
         finally:
             await teardown(agg_client)
-        print("✅ Aggregated deployment benchmark completed!")
+        print("✅ Aggregated deployment benchmark completed successfully!")
     else:
         print("⏭️  Skipping aggregated deployment (not specified)")
 
     # Deploy and benchmark disaggregated (if specified)
     if disagg_manifest:
         print("🚀 Starting disaggregated deployment benchmark...")
+        print(f"📄 Manifest: {disagg_manifest}")
+        print(f"📁 Results will be saved to: {Path(output_dir) / 'disagg'}")
         disagg_name = Path(disagg_manifest).stem
         disagg_client = DynamoDeploymentClient(
             namespace=namespace, deployment_name=disagg_name
         )
         await deploy_and_wait(disagg_client, disagg_manifest)
         try:
-            print("Starting disaggregated concurrency sweep!", flush=True)
+            print("⚙️  Starting disaggregated concurrency sweep!", flush=True)
+            print(
+                "⏱️  This may take several minutes - running through multiple concurrency levels...",
+                flush=True,
+            )
+            print(f"🎯 Model: {model} | ISL: {isl} | OSL: {osl} | StdDev: {std}")
             run_concurrency_sweep(
                 service_url=disagg_client.port_forward_frontend(quiet=True),
                 model_name=model,
@@ -86,18 +125,25 @@ async def run_benchmark_workflow(
             disagg_client.stop_port_forward()
         finally:
             await teardown(disagg_client)
-        print("✅ Disaggregated deployment benchmark completed!")
+        print("✅ Disaggregated deployment benchmark completed successfully!")
     else:
         print("⏭️  Skipping disaggregated deployment (not specified)")
 
     # Deploy and benchmark vanilla backend (if specified)
     if vanilla_manifest:
         print("🚀 Starting vanilla backend deployment benchmark...")
+        print(f"📄 Manifest: {vanilla_manifest}")
+        print(f"📁 Results will be saved to: {Path(output_dir) / 'vanilla'}")
         vanilla_client = VanillaBackendClient(namespace=namespace)
         await vanilla_client.create_deployment(vanilla_manifest)
         await vanilla_client.wait_for_deployment_ready(timeout=1800)
         try:
-            print("Starting vanilla backend concurrency sweep!", flush=True)
+            print("⚙️  Starting vanilla backend concurrency sweep!", flush=True)
+            print(
+                "⏱️  This may take several minutes - running through multiple concurrency levels...",
+                flush=True,
+            )
+            print(f"🎯 Model: {model} | ISL: {isl} | OSL: {osl} | StdDev: {std}")
             run_concurrency_sweep(
                 service_url=vanilla_client.port_forward_frontend(quiet=True),
                 model_name=model,
@@ -108,10 +154,27 @@ async def run_benchmark_workflow(
             )
         finally:
             await teardown(vanilla_client)
-        print("✅ Vanilla backend deployment benchmark completed!")
+        print("✅ Vanilla backend deployment benchmark completed successfully!")
     else:
         print("⏭️  Skipping vanilla backend deployment (not specified)")
 
     # Generate plots across outputs (only for available data)
-    print("📊 Generating plots...")
+    print("📊 Generating performance plots...")
     generate_plots(base_output_dir=Path(output_dir))
+    print(f"📈 Plots saved to: {Path(output_dir) / 'plots'}")
+    print(f"📋 Summary saved to: {Path(output_dir) / 'SUMMARY.txt'}")
+
+    print()
+    print("🎉 Benchmark workflow completed successfully!")
+    print(f"📁 All results available at: {output_dir}")
+    deployed_types = []
+    if agg_manifest:
+        deployed_types.append("aggregated")
+    if disagg_manifest:
+        deployed_types.append("disaggregated")
+    if vanilla_manifest:
+        deployed_types.append("vanilla")
+
+    if deployed_types:
+        print(f"🚀 Benchmarked deployments: {', '.join(deployed_types)}")
+    print(f"📊 View plots at: {Path(output_dir) / 'plots'}")

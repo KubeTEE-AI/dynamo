@@ -15,14 +15,26 @@
 
 # Dynamo Benchmarking Guide
 
-This guide shows how to benchmark NVIDIA Dynamo deployments on Kubernetes to compare performance between aggregated, disaggregated, and vanilla vLLM configurations.
+This guide shows how to benchmark NVIDIA Dynamo deployments on Kubernetes to compare performance between aggregated, disaggregated, and vanilla backend configurations. You can benchmark existing endpoints or deploy and test new configurations.
 
 ## What You'll Get
 
-Running the benchmark script will:
-- Deploy and test three configurations: Dynamo aggregated, Dynamo disaggregated, and vanilla vLLM
-- Generate performance plots comparing latency and throughput across different load levels
-- Save all results to analyze optimal configurations for your workload
+The benchmark script supports two modes:
+
+**Deployment Benchmarking**: Deploy and test Dynamo configurations:
+- Deploy and test one or more configurations: Dynamo aggregated, Dynamo disaggregated, and vanilla backends
+- Automatically handle deployment lifecycle (create, wait, benchmark, cleanup)
+- Generate performance plots comparing latency and throughput across configurations
+
+**Endpoint Benchmarking**: Test existing endpoints:
+- Benchmark any existing HTTP endpoint without deployment overhead
+- Test your already-running services or external APIs
+- Ideal for comparing against baselines or testing production endpoints
+
+Both modes:
+- Run concurrency sweeps across multiple load levels (1, 2, 4, 8, 16, 32, 64, 128 concurrent requests)
+- Generate comprehensive performance plots and analysis
+- Save all results for detailed analysis of optimal configurations
 
 ## Prerequisites
 
@@ -40,33 +52,60 @@ Running the benchmark script will:
 
 ## Quick Start
 
-### Important: Check Image Accessibility
+Choose one of the approaches below based on whether you want to benchmark existing endpoints or deploy new configurations.
 
-Before running benchmarks, ensure the container images in your YAML manifests are accessible. The example manifests may contain private registry images that need to be updated.
+### Option A: Benchmark an Existing Endpoint
+
+If you already have a running LLM endpoint (Dynamo, vLLM, or any OpenAI-compatible API):
+
+```bash
+# Set your namespace
+export NAMESPACE=benchmarking
+
+# Benchmark your existing endpoint
+./benchmarks/benchmark.sh \
+   --namespace $NAMESPACE \
+   --endpoint "http://your-endpoint:8000"
+```
+
+This will:
+- Connect directly to your endpoint without deploying anything
+- Run performance tests at multiple concurrency levels
+- Save results to `./benchmarks/results/benchmarking/`
+- Generate comparison plots
+
+### Option B: Deploy and Benchmark Dynamo Configurations
+
+#### Important: Check Image Accessibility
+
+Before running deployment benchmarks, ensure the container images in your YAML manifests are accessible. The example manifests may contain private registry images that need to be updated.
 
 Manually edit your manifests to use accessible images from [Dynamo NGC](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/ai-dynamo/collections/ai-dynamo/artifacts) or your own registry with proper credentials configured.
 
-You can also use the script below to automatically update the CRDs to use the public images.
+#### Running Deployment Benchmarks
 
-```bash
-# Update vLLM backend files
-find components/backends/vllm/ -name "*.yaml" -type f -exec sed -i.bak 's|nvcr\.io/nvidian/[^[:space:]]*|nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.4.0|g' {} \;
-```
-
-### Running the Benchmark
-
-The easiest way to benchmark is using the automated script with example manifests. Modify the example manifests to use the model you would like to benchmark and to match your hardware. The default model is `meta-llama/Meta-Llama-3.1-8B-Instruct`.
+You can benchmark any combination of deployment types. The script will automatically skip unspecified types:
 
 ```bash
 # 1. Set your namespace (same one from deploy/utils setup)
 export NAMESPACE=benchmarking
 
-# 2. Run the benchmark script
+# 2a. Benchmark all three deployment types
 ./benchmarks/benchmark.sh \
    --namespace $NAMESPACE \
    --agg components/backends/vllm/deploy/agg.yaml \
    --disagg components/backends/vllm/deploy/disagg.yaml \
    --vanilla benchmarks/utils/templates/vanilla-vllm.yaml
+
+# 2b. Or benchmark just disaggregated deployment
+./benchmarks/benchmark.sh \
+   --namespace $NAMESPACE \
+   --disagg components/backends/vllm/deploy/disagg.yaml
+
+# 2c. Or benchmark TensorRT-LLM with GPT-OSS
+./benchmarks/benchmark.sh \
+   --namespace $NAMESPACE \
+   --disagg components/backends/trtllm/deploy/gpt-oss-disagg.yaml
 ```
 
 You'll see output like this confirming your configuration:
@@ -124,15 +163,24 @@ To benchmark your specific model, customize the manifests:
 For direct control over the benchmark workflow:
 
 ```bash
-# Run benchmark directly with Python
+# Endpoint benchmarking
 python3 -u -m benchmarks.utils.benchmark \
-   --agg $AGG_CONFIG \
-   --disagg $DISAGG_CONFIG \
-   --vanilla $VANILLA_VLLM_CONFIG \
+   --endpoint "http://your-endpoint:8000" \
+   --namespace $NAMESPACE \
    --isl 200 \
    --std 10 \
    --osl 200 \
+   --output-dir $OUTPUT_DIR
+
+# Deployment benchmarking (any combination)
+python3 -u -m benchmarks.utils.benchmark \
+   --agg $AGG_CONFIG \
+   --disagg $DISAGG_CONFIG \
+   --vanilla $VANILLA_CONFIG \
    --namespace $NAMESPACE \
+   --isl 200 \
+   --std 10 \
+   --osl 200 \
    --output-dir $OUTPUT_DIR
 
 # Generate plots separately
@@ -141,16 +189,21 @@ python3 -m benchmarks.utils.plot --data-dir $OUTPUT_DIR
 
 ## Configuration Options
 
-All configuration is done via command line arguments:
+The benchmarking script supports flexible configuration options:
 
 ```bash
-./benchmarks/benchmark.sh --namespace NAMESPACE --agg CONFIG --disagg CONFIG --vanilla CONFIG [OPTIONS]
+./benchmarks/benchmark.sh --namespace NAMESPACE [--endpoint URL | --agg CONFIG] [--disagg CONFIG] [--vanilla CONFIG] [OPTIONS]
 
 REQUIRED:
   -n, --namespace NAMESPACE     Kubernetes namespace
+
+  Either:
+  --endpoint URL                Existing endpoint URL to benchmark
+
+  Or at least one of:
   --agg CONFIG                  Aggregated deployment manifest
   --disagg CONFIG               Disaggregated deployment manifest
-  --vanilla CONFIG              Vanilla vLLM deployment manifest
+  --vanilla CONFIG              Vanilla backend deployment manifest
 
 OPTIONS:
   -h, --help                    Show help message and examples
@@ -160,7 +213,26 @@ OPTIONS:
   -o, --osl LENGTH              Output sequence length (default: 200)
   -d, --output-dir DIR          Output directory (default: ./benchmarks/results)
   --verbose                     Enable verbose output
+
+EXAMPLES:
+  # Benchmark existing endpoint
+  ./benchmarks/benchmark.sh --namespace my-ns --endpoint "http://localhost:8000"
+
+  # Benchmark only disaggregated deployment
+  ./benchmarks/benchmark.sh --namespace my-ns --disagg disagg.yaml
+
+  # Benchmark all deployment types
+  ./benchmarks/benchmark.sh --namespace my-ns --agg agg.yaml --disagg disagg.yaml --vanilla vanilla.yaml
+
+  # Custom parameters
+  ./benchmarks/benchmark.sh --namespace my-ns --endpoint "http://my-api:8000" --model "meta-llama/Meta-Llama-3-8B" --isl 512 --osl 512
 ```
+
+### Important Notes
+
+- **Mutual Exclusivity**: You cannot use `--endpoint` together with deployment options (`--agg`, `--disagg`, `--vanilla`)
+- **Flexible Deployment**: When using deployment options, you can specify any combination - the script will skip unspecified types
+- **Model Parameter**: The `--model` parameter configures GenAI-Perf for testing, not deployment (deployment model is determined by the manifest files)
 
 ## Understanding Your Results
 
@@ -196,8 +268,9 @@ Example plots -- **for demonstration purposes only**:
 
 ### Data Files
 
-For deeper analysis, raw data is organized by deployment type and concurrency:
+Raw data is organized by deployment/benchmark type and concurrency level:
 
+**For Deployment Benchmarking:**
 ```
 benchmarks/results/
 ├── SUMMARY.txt                  # Human-readable benchmark summary
@@ -207,15 +280,27 @@ benchmarks/results/
 │   ├── request_throughput_vs_concurrency.png
 │   ├── efficiency_tok_s_gpu_vs_user.png
 │   └── avg_time_to_first_token_vs_concurrency.png
-├── agg/                         # Aggregated deployment results
+├── agg/                         # Aggregated deployment results (if run)
 │   ├── c1/                      # Concurrency level 1
 │   │   └── profile_export_genai_perf.json
 │   ├── c2/                      # Concurrency level 2
 │   └── ...                      # Other concurrency levels
-├── disagg/                      # Disaggregated deployment results
+├── disagg/                      # Disaggregated deployment results (if run)
 │   └── c*/                      # Same structure as agg/
-└── vanilla/                     # Vanilla vLLM deployment results
+└── vanilla/                     # Vanilla backend deployment results (if run)
     └── c*/                      # Same structure as agg/
+```
+
+**For Endpoint Benchmarking:**
+```
+benchmarks/results/
+├── SUMMARY.txt                  # Human-readable benchmark summary
+├── plots/                       # Performance visualization plots
+└── benchmarking/                # Endpoint benchmark results
+    ├── c1/                      # Concurrency level 1
+    │   └── profile_export_genai_perf.json
+    ├── c2/                      # Concurrency level 2
+    └── ...                      # Other concurrency levels
 ```
 
 Each concurrency directory contains:

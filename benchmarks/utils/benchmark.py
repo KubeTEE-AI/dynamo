@@ -19,6 +19,10 @@ def main() -> int:
         "--vanilla",
         help="Path to vanilla backend manifest",
     )
+    parser.add_argument(
+        "--endpoint",
+        help="Existing endpoint URL to benchmark (mutually exclusive with --agg/--disagg/--vanilla)",
+    )
     parser.add_argument("--namespace", required=True, help="Kubernetes namespace")
     parser.add_argument("--isl", type=int, default=200, help="Input sequence length")
     parser.add_argument(
@@ -38,11 +42,20 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    # Check that at least one deployment type is specified
+    # Check mutual exclusivity between endpoint and deployment manifests
     deployment_types = [args.agg, args.disagg, args.vanilla]
-    if not any(deployment_types):
+    has_deployment_manifests = any(deployment_types)
+    has_endpoint = args.endpoint is not None
+
+    if has_endpoint and has_deployment_manifests:
         print(
-            "ERROR: At least one deployment type (--agg, --disagg, or --vanilla) must be specified"
+            "ERROR: --endpoint cannot be used together with --agg, --disagg, or --vanilla"
+        )
+        return 1
+
+    if not has_endpoint and not has_deployment_manifests:
+        print(
+            "ERROR: Must specify either --endpoint OR at least one deployment type (--agg, --disagg, or --vanilla)"
         )
         return 1
 
@@ -58,6 +71,7 @@ def main() -> int:
             agg_manifest=args.agg,
             disagg_manifest=args.disagg,
             vanilla_manifest=args.vanilla,
+            endpoint=args.endpoint,
             isl=args.isl,
             std=args.std,
             osl=args.osl,
