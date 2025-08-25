@@ -118,8 +118,9 @@ Dynamo provides a simple way to spin up a local set of inference components incl
 - **Workers** – Set of pre-configured LLM serving engines.
 
 ```
-# Start an OpenAI compatible HTTP server, a pre-processor (prompt templating and tokenization) and a router:
-python -m dynamo.frontend --http-port 8080
+# Start an OpenAI compatible HTTP server, a pre-processor (prompt templating and tokenization) and a router.
+# Pass the TLS certificate and key paths to use HTTPS instead of HTTP.
+python -m dynamo.frontend --http-port 8080 [--tls-cert-path cert.pem] [--tls-key-path key.pem]
 
 # Start the SGLang engine, connecting to NATS and etcd to receive requests. You can run several of these,
 # both for the same model and for multiple models. The frontend node will discover them.
@@ -183,7 +184,7 @@ Run the backend/worker like this:
 python -m dynamo.sglang.worker --help
 ```
 
-You can pass any sglang flags directly to this worker, see https://docs.sglang.ai/backend/server_arguments.html . See there to use multiple GPUs.
+You can pass any sglang flags directly to this worker, see https://docs.sglang.ai/advanced_features/server_arguments.html . See there to use multiple GPUs.
 
 ## TensorRT-LLM
 
@@ -191,7 +192,7 @@ It is recommended to use [NGC PyTorch Container](https://catalog.ngc.nvidia.com/
 
 > [!Note]
 > Ensure that you select a PyTorch container image version that matches the version of TensorRT-LLM you are using.
-> For example, if you are using `tensorrt-llm==1.0.0rc4`, use the PyTorch container image version `25.05`.
+> For example, if you are using `tensorrt-llm==1.0.0rc6`, use the PyTorch container image version `25.06`.
 > To find the correct PyTorch container version for your desired `tensorrt-llm` release, visit the [TensorRT-LLM Dockerfile.multi](https://github.com/NVIDIA/TensorRT-LLM/blob/main/docker/Dockerfile.multi) on GitHub. Switch to the branch that matches your `tensorrt-llm` version, and look for the `BASE_TAG` line to identify the recommended PyTorch container tag.
 
 > [!Important]
@@ -200,7 +201,10 @@ It is recommended to use [NGC PyTorch Container](https://catalog.ngc.nvidia.com/
 ### Install prerequisites
 ```
 # Optional step: Only required for Blackwell and Grace Hopper
-pip3 install torch==2.7.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+uv pip install torch==2.7.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+
+# Required until the trtllm version is bumped to include this pinned dependency itself
+uv pip install "cuda-python>=12,<13"
 
 sudo apt-get -y install libopenmpi-dev
 ```
@@ -255,7 +259,15 @@ source $HOME/.cargo/env
 
 ## 3. Create a Python virtual env:
 
+Follow the instructions in [uv installation](https://docs.astral.sh/uv/#installation) guide to install uv if you don't have `uv` installed. Once uv is installed, create a virtual environment and activate it.
+
+- Install uv
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
+
+- Create a virtual environment
+```bash
 uv venv dynamo
 source dynamo/bin/activate
 ```

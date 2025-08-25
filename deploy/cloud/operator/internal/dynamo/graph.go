@@ -31,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/ptr"
 
 	grovev1alpha1 "github.com/NVIDIA/grove/operator/api/core/v1alpha1"
 	"github.com/ai-dynamo/dynamo/deploy/cloud/operator/api/dynamo/common"
@@ -105,7 +106,7 @@ func (s ServiceConfig) GetNamespace() *string {
 	return &s.Config.Dynamo.Namespace
 }
 
-func GetDefaultDynamoNamespace(ctx context.Context, dynamoDeployment *v1alpha1.DynamoGraphDeployment) string {
+func GetDefaultDynamoNamespace(dynamoDeployment *v1alpha1.DynamoGraphDeployment) string {
 	return fmt.Sprintf("dynamo-%s", dynamoDeployment.Name)
 }
 
@@ -118,7 +119,10 @@ func ParseDynDeploymentConfig(ctx context.Context, jsonContent []byte) (DynDeplo
 // GenerateDynamoComponentsDeployments generates a map of DynamoComponentDeployments from a DynamoGraphConfig
 func GenerateDynamoComponentsDeployments(ctx context.Context, parentDynamoGraphDeployment *v1alpha1.DynamoGraphDeployment, defaultIngressSpec *v1alpha1.IngressSpec) (map[string]*v1alpha1.DynamoComponentDeployment, error) {
 	deployments := make(map[string]*v1alpha1.DynamoComponentDeployment)
-	graphDynamoNamespace := ""
+	graphDynamoNamespace, err := getDynamoNamespace(parentDynamoGraphDeployment)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get the graph dynamo namespace: %w", err)
+	}
 	for componentName, component := range parentDynamoGraphDeployment.Spec.Services {
 		deployment := &v1alpha1.DynamoComponentDeployment{}
 		deployment.Spec.DynamoComponentDeploymentSharedSpec = component.DynamoComponentDeploymentSharedSpec
@@ -126,22 +130,14 @@ func GenerateDynamoComponentsDeployments(ctx context.Context, parentDynamoGraphD
 		deployment.Spec.BackendFramework = parentDynamoGraphDeployment.Spec.BackendFramework
 		deployment.Namespace = parentDynamoGraphDeployment.Namespace
 		deployment.Spec.ServiceName = componentName
-		dynamoNamespace := GetDefaultDynamoNamespace(ctx, parentDynamoGraphDeployment)
-		if component.DynamoNamespace != nil && *component.DynamoNamespace != "" {
-			dynamoNamespace = *component.DynamoNamespace
-		}
-		if graphDynamoNamespace != "" && graphDynamoNamespace != dynamoNamespace {
-			return nil, fmt.Errorf("namespace mismatch for component %s: graph uses namespace %s but component specifies %s", componentName, graphDynamoNamespace, dynamoNamespace)
-		}
-		graphDynamoNamespace = dynamoNamespace
-		deployment.Spec.DynamoNamespace = &dynamoNamespace
+		deployment.Spec.DynamoNamespace = &graphDynamoNamespace
 		labels := make(map[string]string)
 		// add the labels in the spec in order to label all sub-resources
 		deployment.Spec.Labels = labels
 		// and add the labels to the deployment itself
 		deployment.Labels = labels
 		labels[commonconsts.KubeLabelDynamoComponent] = componentName
-		labels[commonconsts.KubeLabelDynamoNamespace] = dynamoNamespace
+		labels[commonconsts.KubeLabelDynamoNamespace] = graphDynamoNamespace
 
 		// Propagate metrics annotation from parent deployment if present
 		if parentDynamoGraphDeployment.Annotations != nil {
@@ -188,6 +184,24 @@ func GenerateDynamoComponentsDeployments(ctx context.Context, parentDynamoGraphD
 		deployments[componentName] = deployment
 	}
 	return deployments, nil
+}
+
+func getDynamoNamespace(parentDynamoGraphDeployment *v1alpha1.DynamoGraphDeployment) (string, error) {
+	graphDynamoNamespace := ""
+	for componentName, component := range parentDynamoGraphDeployment.Spec.Services {
+		dynamoNamespace := ""
+		if component.DynamoNamespace != nil && *component.DynamoNamespace != "" {
+			dynamoNamespace = *component.DynamoNamespace
+		}
+		if graphDynamoNamespace != "" && graphDynamoNamespace != dynamoNamespace {
+			return "", fmt.Errorf("namespace mismatch for component %s: graph uses namespace %s but component specifies %s", componentName, graphDynamoNamespace, dynamoNamespace)
+		}
+		graphDynamoNamespace = dynamoNamespace
+	}
+	if graphDynamoNamespace == "" {
+		graphDynamoNamespace = GetDefaultDynamoNamespace(parentDynamoGraphDeployment)
+	}
+	return graphDynamoNamespace, nil
 }
 
 // updateDynDeploymentConfig updates the runtime config object for the given dynamoDeploymentComponent
@@ -663,35 +677,40 @@ func addStandardEnvVars(container *corev1.Container, controllerConfig controller
 // GenerateBasePodSpec creates a basic PodSpec with common logic shared between controller and grove
 // Includes standard environment variables (DYNAMO_PORT, NATS_SERVER, ETCD_ENDPOINTS)
 // Deployment-specific environment merging should be handled by the caller
+//
+//nolint:gocyclo
 func GenerateBasePodSpec(
 	component *v1alpha1.DynamoComponentDeploymentOverridesSpec,
 	backendFramework BackendFramework,
 	secretsRetriever SecretsRetriever,
+	parentGraphDeploymentName string,
 	namespace string,
 	role Role,
 	numberOfNodes int32,
 	controllerConfig controller_common.Config,
 	multinodeDeploymentType commonconsts.MultinodeDeploymentType,
 	serviceName string,
-) (corev1.PodSpec, error) {
+) (*corev1.PodSpec, error) {
 	// Start with base container generated per component type
-	componentDefaults := ComponentDefaultsFactory(component.ComponentType, numberOfNodes)
-	container, err := componentDefaults.GetBaseContainer(numberOfNodes)
+	componentContext := generateComponentContext(component, parentGraphDeploymentName, namespace, numberOfNodes)
+	componentDefaults := ComponentDefaultsFactory(component.ComponentType)
+	container, err := componentDefaults.GetBaseContainer(componentContext)
 	if err != nil {
-		return corev1.PodSpec{}, fmt.Errorf("failed to get base container: %w", err)
+		return nil, fmt.Errorf("failed to get base container: %w", err)
 	}
 
 	if component.ExtraPodSpec != nil && component.ExtraPodSpec.MainContainer != nil {
 		main := component.ExtraPodSpec.MainContainer.DeepCopy()
 		if main != nil {
 			// merge the extraPodSpec from the parent deployment with the extraPodSpec from the service
+			containerEnvs := container.Env
 			err = mergo.Merge(&container, *main, mergo.WithOverride)
 			if err != nil {
-				return corev1.PodSpec{}, fmt.Errorf("failed to merge extraPodSpec: %w", err)
+				return nil, fmt.Errorf("failed to merge extraPodSpec: %w", err)
 			}
 
 			// main container fields that require special handling
-			container.Env = MergeEnvs(component.Envs, container.Env)
+			container.Env = MergeEnvs(containerEnvs, container.Env)
 			// Note: startup probe does not have its own top level field so it must be passed in extraPodSpec.MainContainer
 			// We want to overwrite entirely if provided rather than merge
 			if main.StartupProbe != nil {
@@ -699,6 +718,7 @@ func GenerateBasePodSpec(
 			}
 		}
 	}
+	container.Env = MergeEnvs(component.Envs, container.Env)
 
 	// Merge probes entirely if they are passed (no partial merge)
 	if component.LivenessProbe != nil {
@@ -710,7 +730,7 @@ func GenerateBasePodSpec(
 
 	overrideResources, err := controller_common.GetResourcesConfig(component.Resources)
 	if err != nil {
-		return corev1.PodSpec{}, fmt.Errorf("failed to get resources config: %w", err)
+		return nil, fmt.Errorf("failed to get resources config: %w", err)
 	}
 	// Requests
 	if overrideResources != nil && len(overrideResources.Requests) > 0 {
@@ -762,39 +782,40 @@ func GenerateBasePodSpec(
 			MountPath: *component.PVC.MountPoint,
 		})
 	}
-	shmVolume, shmVolumeMount := generateSharedMemoryVolumeAndMount(&container.Resources)
-	volumes = append(volumes, shmVolume)
-	container.VolumeMounts = append(container.VolumeMounts, shmVolumeMount)
+	if shmVol, shmMount := generateSharedMemoryVolumeAndMount(component.SharedMemory); shmVol != nil && shmMount != nil {
+		volumes = append(volumes, *shmVol)
+		container.VolumeMounts = append(container.VolumeMounts, *shmMount)
+	}
 
 	// Apply backend-specific container modifications
 	multinodeDeployer := MultinodeDeployerFactory(multinodeDeploymentType)
 	if multinodeDeployer == nil {
-		return corev1.PodSpec{}, fmt.Errorf("unsupported multinode deployment type: %s", multinodeDeploymentType)
+		return nil, fmt.Errorf("unsupported multinode deployment type: %s", multinodeDeploymentType)
 	}
 	backend := BackendFactory(backendFramework)
 	if backend == nil {
-		return corev1.PodSpec{}, fmt.Errorf("unsupported backend framework: %s", backendFramework)
+		return nil, fmt.Errorf("unsupported backend framework: %s", backendFramework)
 	}
 	backend.UpdateContainer(&container, numberOfNodes, role, component, serviceName, multinodeDeployer)
 
 	// get base podspec from component
-	podSpec, err := componentDefaults.GetBasePodSpec(numberOfNodes)
+	podSpec, err := componentDefaults.GetBasePodSpec(componentContext)
 	if err != nil {
-		return corev1.PodSpec{}, fmt.Errorf("failed to get base podspec: %w", err)
+		return nil, fmt.Errorf("failed to get base podspec: %w", err)
 	}
 
 	if component.ExtraPodSpec != nil && component.ExtraPodSpec.PodSpec != nil {
 		// merge extraPodSpec PodSpec with base podspec
 		err := mergo.Merge(&podSpec, component.ExtraPodSpec.PodSpec.DeepCopy(), mergo.WithOverride)
 		if err != nil {
-			return corev1.PodSpec{}, fmt.Errorf("failed to merge extraPodSpec: %w", err)
+			return nil, fmt.Errorf("failed to merge extraPodSpec: %w", err)
 		}
 	}
 	podSpec.Containers = append(podSpec.Containers, container)
 	podSpec.Volumes = append(podSpec.Volumes, volumes...)
 	podSpec.ImagePullSecrets = append(podSpec.ImagePullSecrets, imagePullSecrets...)
 	backend.UpdatePodSpec(&podSpec, numberOfNodes, role, component, serviceName)
-	return podSpec, nil
+	return controller_common.CanonicalizePodSpec(&podSpec), nil
 }
 
 func setMetricsLabels(labels map[string]string, dynamoGraphDeployment *v1alpha1.DynamoGraphDeployment) {
@@ -808,6 +829,18 @@ func setMetricsLabels(labels map[string]string, dynamoGraphDeployment *v1alpha1.
 	labels[commonconsts.KubeLabelMetricsEnabled] = commonconsts.KubeLabelValueTrue
 }
 
+func generateComponentContext(component *v1alpha1.DynamoComponentDeploymentOverridesSpec, parentGraphDeploymentName string, namespace string, numberOfNodes int32) ComponentContext {
+	componentContext := ComponentContext{
+		numberOfNodes:                  numberOfNodes,
+		ParentGraphDeploymentName:      parentGraphDeploymentName,
+		ParentGraphDeploymentNamespace: namespace,
+	}
+	if component.DynamoNamespace != nil {
+		componentContext.DynamoNamespace = *component.DynamoNamespace
+	}
+	return componentContext
+}
+
 // GeneratePodSpecForComponent creates a PodSpec for Grove deployments (simplified wrapper)
 func GeneratePodSpecForComponent(
 	component *v1alpha1.DynamoComponentDeploymentOverridesSpec,
@@ -819,13 +852,13 @@ func GeneratePodSpecForComponent(
 	controllerConfig controller_common.Config,
 	multinodeDeploymentType commonconsts.MultinodeDeploymentType,
 	serviceName string,
-) (corev1.PodSpec, error) {
+) (*corev1.PodSpec, error) {
 	if len(dynamoDeployment.Spec.Envs) > 0 {
 		component.Envs = MergeEnvs(dynamoDeployment.Spec.Envs, component.Envs)
 	}
-	podSpec, err := GenerateBasePodSpec(component, backendFramework, secretsRetriever, dynamoDeployment.Namespace, role, numberOfNodes, controllerConfig, multinodeDeploymentType, serviceName)
+	podSpec, err := GenerateBasePodSpec(component, backendFramework, secretsRetriever, dynamoDeployment.Name, dynamoDeployment.Namespace, role, numberOfNodes, controllerConfig, multinodeDeploymentType, serviceName)
 	if err != nil {
-		return corev1.PodSpec{}, err
+		return nil, err
 	}
 	return podSpec, nil
 }
@@ -844,12 +877,17 @@ func GenerateGrovePodGangSet(
 	gangSet.Spec.Template.HeadlessServiceConfig = &grovev1alpha1.HeadlessServiceConfig{
 		PublishNotReadyAddresses: true,
 	}
+	gangSet.Spec.Template.StartupType = ptr.To(grovev1alpha1.CliqueStartupTypeAnyOrder)
 	if controllerConfig.Grove.TerminationDelay > 0 {
 		gangSet.Spec.Template.TerminationDelay = &metav1.Duration{Duration: controllerConfig.Grove.TerminationDelay}
 	}
-
+	dynamoNamespace, err := getDynamoNamespace(dynamoDeployment)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get the graph dynamo namespace: %w", err)
+	}
 	var scalingGroups []grovev1alpha1.PodCliqueScalingGroupConfig
 	for serviceName, component := range dynamoDeployment.Spec.Services {
+		component.DynamoNamespace = &dynamoNamespace
 		// Determine backend framework using hybrid approach
 		backendFramework, err := getBackendFrameworkFromComponent(component, dynamoDeployment)
 		if err != nil {
@@ -880,9 +918,10 @@ func GenerateGrovePodGangSet(
 			clique := &grovev1alpha1.PodCliqueTemplateSpec{
 				Name: strings.ToLower(r.Name),
 				Spec: grovev1alpha1.PodCliqueSpec{
-					RoleName: strings.ToLower(r.Name),
-					Replicas: r.Replicas,
-					PodSpec:  podSpec,
+					RoleName:     strings.ToLower(r.Name),
+					Replicas:     r.Replicas,
+					MinAvailable: ptr.To(int32(1)),
+					PodSpec:      *podSpec,
 				},
 			}
 			labels, err := generateLabels(component, dynamoDeployment, r.Name)
@@ -904,9 +943,10 @@ func GenerateGrovePodGangSet(
 
 		if isMultinode {
 			scalingGroups = append(scalingGroups, grovev1alpha1.PodCliqueScalingGroupConfig{
-				Name:        strings.ToLower(serviceName),
-				CliqueNames: cliqueNames,
-				Replicas:    component.Replicas,
+				Name:         strings.ToLower(serviceName),
+				CliqueNames:  cliqueNames,
+				Replicas:     component.Replicas,
+				MinAvailable: ptr.To(int32(1)),
 			})
 		}
 	}
@@ -914,7 +954,7 @@ func GenerateGrovePodGangSet(
 		gangSet.Spec.Template.PodCliqueScalingGroupConfigs = scalingGroups
 	}
 
-	return gangSet, nil
+	return controller_common.CanonicalizePodGangSet(gangSet), nil
 }
 
 func generateLabels(component *v1alpha1.DynamoComponentDeploymentOverridesSpec, dynamoDeployment *v1alpha1.DynamoGraphDeployment, componentName string) (map[string]string, error) {
@@ -977,7 +1017,7 @@ func detectBackendFrameworkFromArgs(command []string, args []string) (BackendFra
 	}
 
 	if len(detected) == 0 {
-		return "", fmt.Errorf("no backend framework detected from command: %q", fullCommand)
+		return BackendFrameworkNoop, nil
 	}
 
 	if len(detected) > 1 {
@@ -1024,13 +1064,13 @@ func determineBackendFramework(
 	}
 
 	// Validate consistency if both detected and explicit exist
-	if detectedFramework != "" && explicitFramework != "" && detectedFramework != explicitFramework {
+	if detectedFramework != "" && detectedFramework != BackendFrameworkNoop && explicitFramework != "" && detectedFramework != explicitFramework {
 		return "", fmt.Errorf("backend framework mismatch: detected %q from command but explicitly configured as %q",
 			detectedFramework, explicitFramework)
 	}
 
 	// Return in order of preference: detected > explicit > error
-	if detectedFramework != "" {
+	if detectedFramework != "" && detectedFramework != BackendFrameworkNoop {
 		return detectedFramework, nil
 	}
 
@@ -1044,7 +1084,7 @@ func determineBackendFramework(
 	}
 
 	// No command/args to detect from and no explicit config
-	return "", fmt.Errorf("backend framework must be specified explicitly or detectable from command/args")
+	return BackendFrameworkNoop, nil
 }
 
 // getBackendFrameworkFromComponent attempts to determine backend framework using hybrid approach:
@@ -1110,7 +1150,7 @@ func GenerateBasePodSpecForController(
 	controllerConfig controller_common.Config,
 	role Role,
 	multinodeDeploymentType commonconsts.MultinodeDeploymentType,
-) (corev1.PodSpec, error) {
+) (*corev1.PodSpec, error) {
 	// Convert to our interface
 	componentSpec := ConvertDynamoComponentDeploymentToSpec(dynComponent)
 
@@ -1119,7 +1159,7 @@ func GenerateBasePodSpecForController(
 	// Determine backend framework using hybrid approach
 	backendFramework, err := getBackendFrameworkFromDynamoComponent(dynComponent)
 	if err != nil {
-		return corev1.PodSpec{}, fmt.Errorf("failed to determine backend framework: %w", err)
+		return nil, fmt.Errorf("failed to determine backend framework: %w", err)
 	}
 
 	// Generate base PodSpec with standard env vars using merged component envs
@@ -1129,6 +1169,7 @@ func GenerateBasePodSpecForController(
 		componentSpec,
 		backendFramework,
 		secretsRetriever,
+		dynComponent.GetParentGraphDeploymentName(),
 		dynComponent.Namespace,
 		role,
 		numberOfNodes,
@@ -1137,42 +1178,35 @@ func GenerateBasePodSpecForController(
 		serviceName,
 	)
 	if err != nil {
-		return corev1.PodSpec{}, err
+		return nil, err
 	}
 
 	return podSpec, nil
 }
 
-func generateSharedMemoryVolumeAndMount(resources *corev1.ResourceRequirements) (corev1.Volume, corev1.VolumeMount) {
-	sharedMemorySizeLimit := resource.MustParse("512Mi")
-	// Check if we have memory limits to work with
-	memoryLimit := resources.Limits[corev1.ResourceMemory]
-	if !memoryLimit.IsZero() {
-		// Use 1/4 of memory limit
-		calculatedSize := resource.NewQuantity(memoryLimit.Value()/4, resource.BinarySI)
-		// Apply bounds: minimum 512Mi, maximum 8Gi
-		minSize := resource.MustParse("512Mi")
-		maxSize := resource.MustParse("8Gi")
-
-		if calculatedSize.Cmp(minSize) > 0 && calculatedSize.Cmp(maxSize) < 0 {
-			sharedMemorySizeLimit = *calculatedSize
-		} else if calculatedSize.Cmp(maxSize) >= 0 {
-			sharedMemorySizeLimit = maxSize // Cap at maximum
+func generateSharedMemoryVolumeAndMount(spec *v1alpha1.SharedMemorySpec) (*corev1.Volume, *corev1.VolumeMount) {
+	// default: enabled=true, size=8Gi
+	size := resource.MustParse(commonconsts.DefaultSharedMemorySize)
+	if spec != nil {
+		if spec.Disabled {
+			return nil, nil
 		}
-		// If calculatedSize < minSize, keep the 512Mi base
+		if !spec.Size.IsZero() {
+			size = spec.Size
+		}
 	}
 	volume := corev1.Volume{
 		Name: commonconsts.KubeValueNameSharedMemory,
 		VolumeSource: corev1.VolumeSource{
 			EmptyDir: &corev1.EmptyDirVolumeSource{
 				Medium:    corev1.StorageMediumMemory,
-				SizeLimit: &sharedMemorySizeLimit,
+				SizeLimit: &size,
 			},
 		},
 	}
 	volumeMount := corev1.VolumeMount{
 		Name:      commonconsts.KubeValueNameSharedMemory,
-		MountPath: "/dev/shm",
+		MountPath: commonconsts.DefaultSharedMemoryMountPath,
 	}
-	return volume, volumeMount
+	return &volume, &volumeMount
 }

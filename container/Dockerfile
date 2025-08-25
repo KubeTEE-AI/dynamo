@@ -8,6 +8,7 @@ ARG BASE_IMAGE="nvcr.io/nvidia/cuda-dl-base"
 # can be updated to later versions.
 ARG BASE_IMAGE_TAG="25.01-cuda12.8-devel-ubuntu24.04"
 ARG RELEASE_BUILD=false
+ARG ENABLE_KVBM=false
 
 # Define general architecture ARGs for supporting both x86 and aarch64 builds.
 #   ARCH: Used for package suffixes (e.g., amd64, arm64)
@@ -34,7 +35,7 @@ ARG ARCH
 ARG ARCH_ALT
 ARG CARGO_BUILD_JOBS
 
-ARG NIXL_UCX_REF=v1.19.x
+ARG NIXL_UCX_REF=v1.19.0
 ARG NIXL_REF=0.4.1
 
 # Environment variables for NIXL
@@ -52,7 +53,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:$PATH \
-    RUST_VERSION=1.87.0
+    RUST_VERSION=1.89.0
 
 WORKDIR /opt/dynamo
 
@@ -113,8 +114,8 @@ RUN rm -rf /opt/hpcx/ucx && \
     rm -rf /usr/local/ucx && \
     echo "Building UCX with reference $NIXL_UCX_REF" && \
     cd /usr/local/src && \
-    git clone --depth 1 --branch $NIXL_UCX_REF https://github.com/openucx/ucx.git && \
-    cd ucx && \
+    git clone https://github.com/openucx/ucx.git && \
+    cd ucx && git checkout $NIXL_UCX_REF && \
     ./autogen.sh && \
     ./configure \
       --prefix=/usr/local/ucx \
@@ -197,6 +198,8 @@ ARG CARGO_BUILD_JOBS
 ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-16}
 # Use build arg RELEASE_BUILD = true to generate wheels for Python 3.10, 3.11 and 3.12.
 ARG RELEASE_BUILD
+# Use arg ENABLE_KVBM = true to turn on the block-manager feature
+ARG ENABLE_KVBM
 
 WORKDIR /opt/dynamo
 
@@ -228,7 +231,11 @@ COPY components/ /opt/dynamo/components/
 RUN uv build --wheel --out-dir /opt/dynamo/dist && \
     cd /opt/dynamo/lib/bindings/python && \
     uv pip install maturin[patchelf] && \
-    maturin build --release --features block-manager --out /opt/dynamo/dist && \
+    if [ "$ENABLE_KVBM" = "true" ]; then \
+        maturin build --release --features block-manager --out /opt/dynamo/dist; \
+    else \
+        maturin build --release --out /opt/dynamo/dist; \
+    fi && \
     if [ "$RELEASE_BUILD" = "true" ]; then \
         # do not enable KVBM feature, ensure compatibility with lower glibc
         uv run --python 3.11 maturin build --release --out /opt/dynamo/dist && \

@@ -211,21 +211,13 @@ envs:
 
 ## Testing the Deployment
 
-Send a test request to verify your deployment. See the [client section](../../../../components/backends/llm/README.md#client) for detailed instructions.
+Send a test request to verify your deployment. See the [client section](../../../../components/backends/vllm/README.md#client) for detailed instructions.
 
 **Note:** For multi-node deployments, target the node running `python3 -m dynamo.frontend <args>`.
 
 ## Model Configuration
 
 The deployment templates support various TensorRT-LLM models and configurations. You can customize model-specific arguments in the worker configuration sections of the YAML files.
-
-### Multi-Token Prediction (MTP) Support
-
-For models supporting Multi-Token Prediction (such as DeepSeek R1), special configuration is available. Note that MTP requires the experimental TensorRT-LLM commit:
-
-```bash
-./container/build.sh --framework tensorrtllm --use-default-experimental-tensorrtllm-commit
-```
 
 ## Monitoring and Health
 
@@ -241,7 +233,7 @@ TensorRT-LLM supports two methods for KV cache transfer in disaggregated serving
 - **UCX** (default): Standard method for KV cache transfer
 - **NIXL** (experimental): Alternative transfer method
 
-For detailed configuration instructions, see the [KV cache transfer guide](../kv-cache-tranfer.md).
+For detailed configuration instructions, see the [KV cache transfer guide](../kv-cache-transfer.md).
 
 ## Request Migration
 

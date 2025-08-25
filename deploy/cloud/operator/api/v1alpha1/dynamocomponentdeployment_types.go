@@ -92,6 +92,9 @@ type DynamoComponentDeploymentSharedSpec struct {
 	// Ingress config to expose the component outside the cluster (or through a service mesh).
 	Ingress *IngressSpec `json:"ingress,omitempty"`
 
+	// SharedMemory controls the tmpfs mounted at /dev/shm (enable/disable and size).
+	SharedMemory *SharedMemorySpec `json:"sharedMemory,omitempty"`
+
 	// +optional
 	// ExtraPodMetadata adds labels/annotations to the created Pods.
 	ExtraPodMetadata *dynamoCommon.ExtraPodMetadata `json:"extraPodMetadata,omitempty"`
@@ -259,4 +262,17 @@ func (s *DynamoComponentDeploymentSharedSpec) GetNumberOfNodes() int32 {
 		return s.Multinode.NodeCount
 	}
 	return 1
+}
+
+func (s *DynamoComponentDeployment) GetParentGraphDeploymentName() string {
+	for _, ownerRef := range s.ObjectMeta.OwnerReferences {
+		if ownerRef.Kind == "DynamoGraphDeployment" {
+			return ownerRef.Name
+		}
+	}
+	return ""
+}
+
+func (s *DynamoComponentDeployment) GetParentGraphDeploymentNamespace() string {
+	return s.GetNamespace()
 }
