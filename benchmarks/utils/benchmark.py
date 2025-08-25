@@ -13,15 +13,11 @@ from benchmarks.utils.workflow import run_benchmark_workflow
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Benchmark Orchestrator")
-    parser.add_argument("--agg", required=True, help="Path to aggregated DGD manifest")
-    parser.add_argument(
-        "--disagg", required=True, help="Path to disaggregated DGD manifest"
-    )
+    parser.add_argument("--agg", help="Path to aggregated DGD manifest")
+    parser.add_argument("--disagg", help="Path to disaggregated DGD manifest")
     parser.add_argument(
         "--vanilla",
-        required=True,
-        help="Path to vanilla vLLM manifest",
-        default="benchmarks/utils/vanilla-vllm.yaml",
+        help="Path to vanilla backend manifest",
     )
     parser.add_argument("--namespace", required=True, help="Kubernetes namespace")
     parser.add_argument("--isl", type=int, default=200, help="Input sequence length")
@@ -42,9 +38,18 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    for p in [args.agg, args.disagg, args.vanilla]:
-        if not Path(p).is_file():
-            print(f"ERROR: Manifest not found: {p}")
+    # Check that at least one deployment type is specified
+    deployment_types = [args.agg, args.disagg, args.vanilla]
+    if not any(deployment_types):
+        print(
+            "ERROR: At least one deployment type (--agg, --disagg, or --vanilla) must be specified"
+        )
+        return 1
+
+    # Validate that specified manifest files exist
+    for manifest_path in deployment_types:
+        if manifest_path and not Path(manifest_path).is_file():
+            print(f"ERROR: Manifest not found: {manifest_path}")
             return 1
 
     asyncio.run(

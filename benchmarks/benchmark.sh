@@ -28,16 +28,18 @@ show_help() {
 Dynamo Benchmark Runner
 
 This script runs complete LLM performance benchmarks across aggregated, disaggregated,
-and vanilla vLLM deployments, then generates performance plots.
+and vanilla deployments, then generates performance plots.
 
 USAGE:
-    $0 --namespace NAMESPACE --agg CONFIG --disagg CONFIG --vanilla CONFIG [OPTIONS]
+    $0 --namespace NAMESPACE [--agg CONFIG] [--disagg CONFIG] [--vanilla CONFIG] [OPTIONS]
 
 REQUIRED:
     -n, --namespace NAMESPACE     Kubernetes namespace
+
+    At least one of:
     --agg CONFIG                  Aggregated deployment manifest
     --disagg CONFIG               Disaggregated deployment manifest
-    --vanilla CONFIG              Vanilla vLLM deployment manifest
+    --vanilla CONFIG              Vanilla backend deployment manifest
 
 OPTIONS:
     -h, --help                    Show this help message
@@ -49,11 +51,15 @@ OPTIONS:
     --verbose                     Enable verbose output
 
 EXAMPLES:
-    # Basic benchmark with provided manifests
+    # Basic benchmark with all deployment types
     $0 --namespace my-namespace \\
        --agg components/backends/vllm/deploy/agg.yaml \\
        --disagg components/backends/vllm/deploy/disagg.yaml \\
        --vanilla benchmarks/utils/templates/vanilla-vllm.yaml
+
+    # Benchmark only aggregated deployment
+    $0 --namespace my-namespace \\
+       --agg components/backends/vllm/deploy/agg.yaml
 
     # Custom model and sequence lengths
     $0 --namespace my-namespace \\
@@ -129,16 +135,9 @@ validate_config() {
         errors+=("--namespace is required")
     fi
 
-    if [[ -z "$AGG_CONFIG" ]]; then
-        errors+=("--agg is required")
-    fi
-
-    if [[ -z "$DISAGG_CONFIG" ]]; then
-        errors+=("--disagg is required")
-    fi
-
-    if [[ -z "$VANILLA_CONFIG" ]]; then
-        errors+=("--vanilla is required")
+    # Check that at least one deployment type is specified
+    if [[ -z "$AGG_CONFIG" && -z "$DISAGG_CONFIG" && -z "$VANILLA_CONFIG" ]]; then
+        errors+=("At least one deployment type (--agg, --disagg, or --vanilla) is required")
     fi
 
     if [[ ${#errors[@]} -gt 0 ]]; then
@@ -150,12 +149,21 @@ validate_config() {
         exit 1
     fi
 
-    for config in "$AGG_CONFIG" "$DISAGG_CONFIG" "$VANILLA_CONFIG"; do
-        if [[ ! -f "$config" ]]; then
-            echo "ERROR: Configuration file not found: $config" >&2
-            exit 1
-        fi
-    done
+    # Validate that specified configuration files exist
+    if [[ -n "$AGG_CONFIG" && ! -f "$AGG_CONFIG" ]]; then
+        echo "ERROR: Configuration file not found: $AGG_CONFIG" >&2
+        exit 1
+    fi
+
+    if [[ -n "$DISAGG_CONFIG" && ! -f "$DISAGG_CONFIG" ]]; then
+        echo "ERROR: Configuration file not found: $DISAGG_CONFIG" >&2
+        exit 1
+    fi
+
+    if [[ -n "$VANILLA_CONFIG" && ! -f "$VANILLA_CONFIG" ]]; then
+        echo "ERROR: Configuration file not found: $VANILLA_CONFIG" >&2
+        exit 1
+    fi
 
     if [[ ! "$ISL" =~ ^[0-9]+$ ]] || [[ "$ISL" -le 0 ]]; then
         echo "ERROR: ISL must be a positive integer, got: $ISL" >&2
@@ -205,10 +213,20 @@ run_benchmark() {
         --std "$STD"
         --osl "$OSL"
         --output-dir "$OUTPUT_DIR"
-        --agg "$AGG_CONFIG"
-        --disagg "$DISAGG_CONFIG"
-        --vanilla "$VANILLA_CONFIG"
     )
+
+    # Add optional deployment arguments only if they are specified
+    if [[ -n "$AGG_CONFIG" ]]; then
+        cmd+=(--agg "$AGG_CONFIG")
+    fi
+
+    if [[ -n "$DISAGG_CONFIG" ]]; then
+        cmd+=(--disagg "$DISAGG_CONFIG")
+    fi
+
+    if [[ -n "$VANILLA_CONFIG" ]]; then
+        cmd+=(--vanilla "$VANILLA_CONFIG")
+    fi
 
     if [[ "$VERBOSE" == "true" ]]; then
         echo "Executing: ${cmd[*]}"

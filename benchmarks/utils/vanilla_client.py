@@ -10,12 +10,12 @@ import yaml
 from kubernetes_asyncio import client, config
 
 
-class VanillaVllmClient:
+class VanillaBackendClient:
     def __init__(
         self,
         namespace: str,
-        deployment_name: str = "vanilla-vllm",
-        service_name: str = "vanilla-vllm",
+        deployment_name: str = "vanilla-backend",
+        service_name: str = "vanilla-backend",
         frontend_port: int = 8000,
     ):
         self.namespace = namespace
