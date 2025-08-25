@@ -33,11 +33,13 @@ class LoadGenerator:
         model: str = "nvidia/Llama-3.1-8B-Instruct-FP8",
         isl: int = 3000,
         osl: int = 150,
+        save_results: bool = False,
     ):
         self.base_url = base_url
         self.model = model
         self.isl = isl
         self.osl = osl
+        self.save_results = save_results
 
     def _calculate_genai_perf_params(
         self,
@@ -226,15 +228,18 @@ class LoadGenerator:
         Run the complete scaling test scenario.
 
         Hardcoded scenario:
-        - Phase 1: 10 req/s for 180s (should maintain 1P1D)
-        - Phase 2: 20 req/s for 180s (should trigger 1P1D -> 2P1D)
+        - Phase 1: 12 req/s for 180s (should maintain 1P1D)
+        - Phase 2: 24 req/s for 180s (should trigger 1P1D -> 2P1D)
+
+        Based on capacity analysis: ~15 req/s/gpu for H200 with ISL/OSL 3000/150.
+        2P1D = 2 prefill workers (~30 req/s prefill) + 1 decode worker (~15 req/s decode).
 
         Returns:
             Dictionary with complete test results
         """
-        # Hardcoded test parameters
-        phase1_req_per_sec = 10.0
-        phase2_req_per_sec = 20.0
+        # Hardcoded test parameters (updated based on capacity analysis)
+        phase1_req_per_sec = 12.0
+        phase2_req_per_sec = 24.0
         phase_duration = 180
         transition_delay = 30
 
@@ -245,12 +250,21 @@ class LoadGenerator:
 
         # Create directories for artifacts
         timestamp = int(time.time())
-        base_dir = f"/tmp/scaling_test_{timestamp}"
+        if self.save_results:
+            # Get the directory of this script to find the project root
+            script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            base_dir = os.path.join(
+                script_dir, "e2e_scaling_results", f"scaling_test_{timestamp}"
+            )
+        else:
+            base_dir = f"/tmp/scaling_test_{timestamp}"
+
         phase1_dir = os.path.join(base_dir, "phase1")
         phase2_dir = os.path.join(base_dir, "phase2")
 
         os.makedirs(phase1_dir, exist_ok=True)
         os.makedirs(phase2_dir, exist_ok=True)
+        logger.info(f"Saving results to: {base_dir}")
 
         results = {
             "test_timestamp": timestamp,
@@ -335,11 +349,20 @@ async def main():
     parser.add_argument(
         "--phase-duration", type=int, default=180, help="Duration of each phase"
     )
+    parser.add_argument(
+        "--save-results",
+        action="store_true",
+        help="Save results to tests/planner/e2e_scaling_results instead of /tmp",
+    )
 
     args = parser.parse_args()
 
     generator = LoadGenerator(
-        base_url=args.base_url, model=args.model, isl=args.isl, osl=args.osl
+        base_url=args.base_url,
+        model=args.model,
+        isl=args.isl,
+        osl=args.osl,
+        save_results=args.save_results,
     )
 
     if args.scaling_test:

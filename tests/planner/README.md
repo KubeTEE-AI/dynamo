@@ -161,12 +161,18 @@ With custom namespace:
 ./run_scaling_test.sh --namespace production
 ```
 
+To save results to `tests/planner/e2e_scaling_results` instead of `/tmp`:
+```bash
+./run_scaling_test.sh --save-results
+```
+
 ### Test Scenario
 
 The main test scenario validates scaling for **H200 with 1P1D configuration**:
-- **Phase 1**: 10 req/s (maintains 1P1D)
-- **Phase 2**: 20 req/s (scales to 2P1D - 2 prefill workers, 1 decode worker)
+- **Phase 1**: 12 req/s (maintains 1P1D)
+- **Phase 2**: 24 req/s (scales to 2P1D - 2 prefill workers, 1 decode worker)
 - **ISL/OSL**: 3000/150 tokens
+- **Capacity**: ~15 req/s/gpu based on interpolator analysis
 
 ### Prerequisites for E2E Tests
 

@@ -22,7 +22,7 @@ spec:
       replicas: 1
       extraPodSpec:
         mainContainer:
-          image: nvcr.io/nvidian/nim-llm-dev/vllm-runtime:dep-301.5
+          image: nvcr.io/nvidian/nim-llm-dev/vllm-runtime:dep-301.6
           args:
             - "python3 -m dynamo.frontend --http-port 8000"
     Planner:
@@ -49,13 +49,9 @@ spec:
         periodSeconds: 60
         timeoutSeconds: 30
         failureThreshold: 10
-      pvc:
-        create: false
-        name: dynamo-pvc
-        mountPoint: /pvc-data
       extraPodSpec:
         mainContainer:
-          image: nvcr.io/nvidian/nim-llm-dev/vllm-runtime:dep-301.5
+          image: nvcr.io/nvidian/nim-llm-dev/vllm-runtime:dep-301.6
           workingDir: /workspace/components/planner/src/dynamo/planner
           ports:
             - name: metrics
@@ -69,7 +65,7 @@ spec:
               --environment=kubernetes
               --backend=vllm
               --adjustment-interval=60
-              --profile-results-dir=/pvc-data/workspace/tests/planner/profiling_results/H200_TP1P_TP1D/profiling_results
+              --profile-results-dir=/workspace/tests/planner/profiling_results/H200_TP1P_TP1D
               --prometheus-port=9085
               --ttft=0.1
               --itl=0.01
@@ -102,7 +98,7 @@ spec:
         failureThreshold: 10
       extraPodSpec:
         mainContainer:
-          image: nvcr.io/nvidian/nim-llm-dev/vllm-runtime:dep-301.5
+          image: nvcr.io/nvidian/nim-llm-dev/vllm-runtime:dep-301.6
           workingDir: /workspace/components/backends/vllm
           command:
             - /bin/sh
@@ -125,7 +121,7 @@ spec:
               port: 9090
             periodSeconds: 30
             failureThreshold: 60
-          image: nvcr.io/nvidian/nim-llm-dev/vllm-runtime:dep-301.5
+          image: nvcr.io/nvidian/nim-llm-dev/vllm-runtime:dep-301.6
           workingDir: /workspace/components/backends/vllm
           command:
             - /bin/sh
@@ -148,7 +144,7 @@ spec:
               port: 9090
             periodSeconds: 30
             failureThreshold: 60
-          image: nvcr.io/nvidian/nim-llm-dev/vllm-runtime:dep-301.5
+          image: nvcr.io/nvidian/nim-llm-dev/vllm-runtime:dep-301.6
           workingDir: /workspace/components/backends/vllm
           command:
             - /bin/sh

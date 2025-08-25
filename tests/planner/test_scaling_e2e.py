@@ -248,13 +248,19 @@ class ScalingE2ETest:
     """End-to-end test for SLA planner scaling behavior."""
 
     def __init__(
-        self, namespace: str = "default", base_url: str = "http://localhost:8000"
+        self,
+        namespace: str = "default",
+        base_url: str = "http://localhost:8000",
+        save_results: bool = False,
     ):
         self.namespace = namespace
         self.base_url = base_url
+        self.save_results = save_results
 
         self.k8s_monitor = KubernetesMonitor(namespace)
-        self.load_generator = LoadGenerator(base_url=base_url)
+        self.load_generator = LoadGenerator(
+            base_url=base_url, save_results=save_results
+        )
 
         self.test_results = {}
 
@@ -263,8 +269,8 @@ class ScalingE2ETest:
         Run the complete scaling test.
 
         Hardcoded scenario:
-        - Phase 1 (10 req/s): Should maintain 1P1D
-        - Phase 2 (20 req/s): Should scale to 1P2D
+        - Phase 1 (12 req/s): Should maintain 1P1D
+        - Phase 2 (24 req/s): Should scale to 2P1D
         """
         logger.info("Starting scaling integration test")
 
@@ -284,7 +290,7 @@ class ScalingE2ETest:
 
         try:
             # Use the load generator's built-in scaling test
-            logger.info("Running hardcoded scaling scenario (10 req/s -> 20 req/s)")
+            logger.info("Running hardcoded scaling scenario (12 req/s -> 24 req/s)")
             load_results = await self.load_generator.run_scaling_test()
 
             phase1_results = load_results.get("phase1", {})
@@ -317,8 +323,8 @@ class ScalingE2ETest:
         test_results = {
             "test_duration": time.time() - test_start_time,
             "config": {
-                "phase1_rps": 10.0,
-                "phase2_rps": 20.0,
+                "phase1_rps": 12.0,
+                "phase2_rps": 24.0,
                 "phase_duration": 180,
                 "transition_delay": 30,
             },
@@ -370,7 +376,7 @@ class ScalingE2ETest:
 
         expected_scaling = {
             "initial_1p1d": initial.prefill_pods == 1 and initial.decode_pods == 1,
-            "final_1p2d": final.prefill_pods == 2 and final.decode_pods == 1,
+            "final_2p1d": final.prefill_pods == 2 and final.decode_pods == 1,
             "scaling_occurred": len(scaling_events) > 0,
             "correct_scaling": (
                 final.prefill_pods == 2
@@ -445,11 +451,18 @@ async def main():
     parser.add_argument(
         "--base-url", default="http://localhost:8000", help="Service URL"
     )
+    parser.add_argument(
+        "--save-results",
+        action="store_true",
+        help="Save results to tests/planner/e2e_scaling_results instead of /tmp",
+    )
     # No additional arguments needed - test is hardcoded
 
     args = parser.parse_args()
 
-    test = ScalingE2ETest(namespace=args.namespace, base_url=args.base_url)
+    test = ScalingE2ETest(
+        namespace=args.namespace, base_url=args.base_url, save_results=args.save_results
+    )
 
     try:
         # Check that service is accessible

@@ -7,7 +7,7 @@
 # 1. Deploys the disaggregated planner if not already running
 # 2. Sets up port forwarding to localhost:8000
 # 3. Waits for the deployment to be ready
-# 4. Runs the hardcoded scaling test (10 req/s -> 20 req/s)
+# 4. Runs the hardcoded scaling test (12 req/s -> 24 req/s)
 # 5. Cleans up
 
 set -e
@@ -18,6 +18,7 @@ YAML_FILE="disagg_planner.yaml"
 FRONTEND_PORT=8000
 LOCAL_PORT=8000
 DEPLOYMENT_NAME="vllm-disagg-planner"
+SAVE_RESULTS=false
 
 # Colors for output
 RED='\033[0;31m'
@@ -221,14 +222,20 @@ cleanup_deployment() {
 
 # Run the scaling test
 run_test() {
-    log_info "Running scaling test (10 req/s -> 20 req/s)..."
+    log_info "Running scaling test (12 req/s -> 24 req/s)..."
 
     local python_cmd="python3"
     if ! command -v python3 &> /dev/null; then
         python_cmd="python"
     fi
 
-    if $python_cmd test_scaling_e2e.py --namespace "$NAMESPACE"; then
+    local test_args="--namespace $NAMESPACE"
+    if [ "$SAVE_RESULTS" = true ]; then
+        test_args="$test_args --save-results"
+        log_info "Results will be saved to tests/planner/e2e_scaling_results"
+    fi
+
+    if $python_cmd test_scaling_e2e.py $test_args; then
         log_success "Scaling test PASSED"
         return 0
     else
@@ -239,20 +246,25 @@ run_test() {
 
 # Main function
 main() {
-    # Parse namespace argument if provided
+    # Parse arguments
     while [[ $# -gt 0 ]]; do
         case $1 in
             --namespace)
                 NAMESPACE="$2"
                 shift 2
                 ;;
+            --save-results)
+                SAVE_RESULTS=true
+                shift
+                ;;
             --help)
-                echo "Usage: $0 [--namespace NS]"
+                echo "Usage: $0 [--namespace NS] [--save-results]"
                 echo ""
-                echo "Run SLA planner scaling test (hardcoded 10 req/s -> 20 req/s scenario)"
+                echo "Run SLA planner scaling test (hardcoded 12 req/s -> 24 req/s scenario)"
                 echo ""
                 echo "Options:"
                 echo "  --namespace NS    Kubernetes namespace (default: default)"
+                echo "  --save-results    Save results to tests/planner/e2e_scaling_results instead of /tmp"
                 echo "  --help            Show this help"
                 exit 0
                 ;;
@@ -266,7 +278,7 @@ main() {
 
     log_info "SLA Planner Scaling Test"
     log_info "Namespace: $NAMESPACE"
-    log_info "Scenario: 10 req/s -> 20 req/s (1P1D -> 2P1D)"
+    log_info "Scenario: 12 req/s -> 24 req/s (1P1D -> 2P1D)"
 
     # Check prerequisites
     check_prerequisites
