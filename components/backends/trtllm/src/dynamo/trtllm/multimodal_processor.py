@@ -14,11 +14,12 @@
 # limitations under the License.
 
 import logging
-import tempfile
 import time
+from io import BytesIO
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 from urllib.parse import urlparse
-from urllib.request import urlretrieve
+from urllib.request import urlopen
 
 import torch
 from tensorrt_llm.inputs import default_multimodal_input_loader
@@ -62,26 +63,33 @@ class MultimodalRequestProcessor:
     def load_tensor_from_path_or_url(self, path: str) -> torch.Tensor:
         """Load a tensor from either a local file path or a URL."""
         if self.is_url(path):
-            # Download the file to a temporary location
-            with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-                try:
-                    urlretrieve(path, tmp_file.name)
-                    tensor = torch.load(tmp_file.name, map_location="cpu")
+            # Download directly to memory using BytesIO (no filesystem ops)
+            try:
+                with urlopen(path) as response:
+                    data = response.read()
+                    tensor_stream = BytesIO(data)
+                    tensor = torch.load(tensor_stream, map_location="cpu")
                     return tensor
-                except Exception as e:
-                    raise RuntimeError(
-                        f"Failed to download or load tensor from URL {path}: {e}"
-                    )
-                finally:
-                    # Clean up temporary file
-                    import os
-
-                    try:
-                        os.unlink(tmp_file.name)
-                    except Exception:
-                        pass  # Ignore cleanup errors
+            except Exception as e:
+                # Log actual error for debugging, return generic error to user
+                logging.error(f"Failed to download or load tensor from URL: {e}")
+                raise RuntimeError("Failed to load tensor")
         else:
-            return torch.load(path, map_location="cpu")
+            # Restrict local file access to /tmp directory only
+            try:
+                resolved_path = Path(path).resolve()
+                tmp_path = Path("/tmp").resolve()
+
+                # Check if the resolved path is within /tmp
+                if not str(resolved_path).startswith(str(tmp_path)):
+                    logging.warning(f"Blocked access to file outside /tmp: {path}")
+                    raise RuntimeError("Failed to load tensor")
+
+                return torch.load(resolved_path, map_location="cpu")
+            except Exception as e:
+                # Log actual error for debugging, return generic error to user
+                logging.error(f"Failed to load tensor from local path: {e}")
+                raise RuntimeError("Failed to load tensor")
 
     def extract_prompt_and_media(
         self, messages: List[Dict]

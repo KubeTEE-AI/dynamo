@@ -242,10 +242,9 @@ async def init(runtime: DistributedRuntime, config: Config):
         default_sampling_params.detokenize = False
 
     connector = None
-    if config.use_nixl_connect:
-        logging.info("Initializing NIXL Connect.")
-        connector = nixl_connect.Connector()
-        await connector.initialize()
+    logging.info("Initializing NIXL Connect.")
+    connector = nixl_connect.Connector()
+    await connector.initialize()
 
     async with get_llm_engine(engine_args) as engine:
         endpoint = component.endpoint(config.endpoint)

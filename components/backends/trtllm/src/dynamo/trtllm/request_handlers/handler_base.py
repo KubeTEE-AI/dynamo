@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import logging
 from dataclasses import asdict, dataclass
 from enum import Enum
@@ -152,7 +153,7 @@ class HandlerBase:
 
         num_output_tokens_so_far = 0
 
-        sampling_params = self.default_sampling_params
+        sampling_params = copy.deepcopy(self.default_sampling_params)
 
         for key, value in request["sampling_options"].items():
             if not value:
