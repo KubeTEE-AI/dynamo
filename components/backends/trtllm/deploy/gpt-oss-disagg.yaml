@@ -14,6 +14,12 @@ spec:
       extraPodSpec:
         mainContainer:
           image: nvcr.io/nvidia/ai-dynamo/tensorrtllm-gpt-oss:latest
+          workingDir: /workspace/components/backends/trtllm
+          command:
+            - /bin/sh
+            - -c
+          args:
+            - "python3 -m dynamo.frontend --http-port 8000"
     TRTLLMPrefillWorker:
       dynamoNamespace: trtllm-gpt-oss-disagg
       envFromSecret: hf-token-secret
@@ -34,11 +40,12 @@ spec:
           volumeMounts:
             - name: model-storage
               mountPath: /model
+              readOnly: true
         volumes:
           - name: model-storage
-            hostPath:
+            nfs:
+              server: 10.110.41.97
               path: /data/models/gpt-oss-120b
-              type: Directory
     TRTLLMDecodeWorker:
       dynamoNamespace: trtllm-gpt-oss-disagg
       envFromSecret: hf-token-secret
@@ -59,8 +66,9 @@ spec:
           volumeMounts:
             - name: model-storage
               mountPath: /model
+              readOnly: true
         volumes:
           - name: model-storage
-            hostPath:
+            nfs:
+              server: 10.110.41.97
               path: /data/models/gpt-oss-120b
-              type: Directory
